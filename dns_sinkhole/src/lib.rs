@@ -30,13 +30,15 @@ pub mod update;
 const RELOAD_CHECK: Duration = Duration::from_secs(30);
 
 /// Встроенный минимум (на случай отсутствия файла). Основное — в hosts-файле.
+/// Только чистая реклама/аналитика. НЕ добавлять сюда API-домены приложений:
+/// например, graph.facebook.com — это основной API Facebook (лента,
+/// Marketplace, сохранённое), его блокировка ломает приложение.
 const DEFAULT_BLOCK: &[&str] = &[
     "doubleclick.net",
     "googlesyndication.com",
     "google-analytics.com",
     "googleadservices.com",
     "app-measurement.com",
-    "graph.facebook.com",
 ];
 
 pub const HOSTS_FILE: &str = "blocklist_hosts.txt";
