@@ -1,8 +1,9 @@
 //! Учёт трафика в реальном времени.
 //!
-//! * relay — перекачивает данные между клиентом и сайтом в обе стороны и
-//!   засчитывает каждый кусок сразу (раньше трафик соединения учитывался
-//!   только после его закрытия — долгое видео висело на 0 MB);
+//! * tunnel/relay — перекачивает данные между клиентом и сайтом в обе стороны
+//!   и засчитывает каждый кусок сразу (раньше трафик соединения учитывался
+//!   только после его закрытия — долгое видео висело на 0 MB); подозрительные
+//!   соединения (нет ответа, ранний обрыв) пишет в лог с пометкой [⚠];
 //! * report — раз в секунду пишет скорость в заголовок окна, раз в 10 секунд —
 //!   строку [stat] в лог (если что-то происходило).
 
@@ -16,23 +17,52 @@ use crate::{State, win};
 
 const BUF: usize = 16 * 1024;
 
+/// Туннель «клиент <-> сайт» с подсчётом и диагностикой: в лог попадают
+/// только подозрительные соединения — сервер ничего не ответил, или
+/// соединение оборвалось, почти ничего не передав. Обычные закрытия молчат.
+pub async fn tunnel(client: &mut TcpStream, upstream: &mut TcpStream, st: &State, target: &str) {
+    let t0 = Instant::now();
+    let (res, down, up) = relay(client, upstream, st).await;
+    let secs = t0.elapsed().as_secs_f64();
+    match res {
+        Ok(()) if down == 0 => println!(
+            "[⚠] {target}: сервер ничего не ответил (отправлено {}, {secs:.1} с)",
+            bytes(up)
+        ),
+        Err(e) if down < 4096 => println!(
+            "[⚠] {target}: обрыв через {secs:.1} с (↓ {} ↑ {}): {e}",
+            bytes(down),
+            bytes(up)
+        ),
+        _ => {}
+    }
+}
+
 /// Перекачка в обе стороны с подсчётом: ↑ клиент -> сайт, ↓ сайт -> клиент.
-pub async fn relay(
+/// Возвращает результат и сколько байт прошло по этому соединению.
+async fn relay(
     client: &mut TcpStream,
     upstream: &mut TcpStream,
     st: &State,
-) -> std::io::Result<()> {
+) -> (std::io::Result<()>, u64, u64) {
+    let (down, up) = (AtomicU64::new(0), AtomicU64::new(0));
     let (mut cr, mut cw) = client.split();
     let (mut ur, mut uw) = upstream.split();
     // try_join: ошибка в одном направлении (обрыв) — закрываем оба.
-    tokio::try_join!(
-        copy_counted(&mut cr, &mut uw, &st.up),
-        copy_counted(&mut ur, &mut cw, &st.down),
-    )?;
-    Ok(())
+    let res = tokio::try_join!(
+        copy_counted(&mut cr, &mut uw, &st.up, &up),
+        copy_counted(&mut ur, &mut cw, &st.down, &down),
+    )
+    .map(|_| ());
+    (res, down.load(Relaxed), up.load(Relaxed))
 }
 
-async fn copy_counted<R, W>(r: &mut R, w: &mut W, counter: &AtomicU64) -> std::io::Result<()>
+async fn copy_counted<R, W>(
+    r: &mut R,
+    w: &mut W,
+    total: &AtomicU64,
+    this_conn: &AtomicU64,
+) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -47,7 +77,8 @@ where
             return Ok(());
         }
         w.write_all(&buf[..n]).await?;
-        counter.fetch_add(n as u64, Relaxed);
+        total.fetch_add(n as u64, Relaxed);
+        this_conn.fetch_add(n as u64, Relaxed);
     }
 }
 

@@ -253,10 +253,11 @@ async fn socks5(mut client: TcpStream, st: &State) -> io::Result<()> {
         Ok(mut up) => {
             socks_reply(&mut client, 0x00).await?;
             println!("[socks5] -> {target}");
-            let _ = traffic::relay(&mut client, &mut up, st).await;
+            traffic::tunnel(&mut client, &mut up, st, &target).await;
             Ok(())
         }
         Err(e) => {
+            println!("[⚠] {target}: не удалось подключиться: {e}");
             socks_reply(&mut client, 0x05).await?;
             Err(e)
         }
@@ -296,6 +297,9 @@ async fn http(mut client: TcpStream, first: u8, st: &State) -> io::Result<()> {
     }
 
     let line_end = find(&buf, b"\r\n").unwrap();
+    // Всё, что клиент прислал после пустой строки (конец заголовков), — уже
+    // данные. Некоторые клиенты шлют их сразу, не дожидаясь ответа прокси.
+    let header_end = find(&buf, b"\r\n\r\n").unwrap() + 4;
     let line = String::from_utf8_lossy(&buf[..line_end]).into_owned();
     let mut it = line.split_whitespace();
     let method = it.next().unwrap_or("").to_string();
@@ -313,11 +317,21 @@ async fn http(mut client: TcpStream, first: u8, st: &State) -> io::Result<()> {
                 client
                     .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                     .await?;
-                println!("[http] CONNECT {target}");
-                let _ = traffic::relay(&mut client, &mut up, st).await;
+                // Данные, пришедшие одним пакетом с CONNECT (раньше терялись —
+                // и шифрованное соединение у такого клиента ломалось).
+                let early = &buf[header_end..];
+                if early.is_empty() {
+                    println!("[http] CONNECT {target}");
+                } else {
+                    up.write_all(early).await?;
+                    st.up.fetch_add(early.len() as u64, Relaxed);
+                    println!("[http] CONNECT {target}  (+{} Б данных сразу за запросом)", early.len());
+                }
+                traffic::tunnel(&mut client, &mut up, st, &target).await;
                 Ok(())
             }
             Err(e) => {
+                println!("[⚠] {target}: не удалось подключиться: {e}");
                 client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n").await?;
                 Err(e)
             }
@@ -331,14 +345,21 @@ async fn http(mut client: TcpStream, first: u8, st: &State) -> io::Result<()> {
             client.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n").await?;
             return Ok(());
         }
-        let mut up = TcpStream::connect((host.as_str(), port)).await?;
+        let mut up = match TcpStream::connect((host.as_str(), port)).await {
+            Ok(u) => u,
+            Err(e) => {
+                println!("[⚠] {hostport}: не удалось подключиться: {e}");
+                client.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n").await?;
+                return Err(e);
+            }
+        };
         println!("[http] {method} {host}:{port}{path}");
         let first_line = format!("{method} {path} HTTP/1.1\r\n");
         up.write_all(first_line.as_bytes()).await?;
         up.write_all(&buf[line_end + 2..]).await?;
         st.up
             .fetch_add((first_line.len() + buf.len() - line_end - 2) as u64, Relaxed);
-        let _ = traffic::relay(&mut client, &mut up, st).await;
+        traffic::tunnel(&mut client, &mut up, st, &hostport).await;
         Ok(())
     }
 }

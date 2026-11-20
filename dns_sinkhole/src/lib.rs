@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 use tokio::net::UdpSocket;
 
@@ -49,7 +49,12 @@ struct State {
     upstream: SocketAddr,
     total: AtomicU64,
     blocked: AtomicU64,
+    /// Домены, уже показанные как «напрямую» (чтобы печатать каждый один раз).
+    direct_seen: Mutex<HashSet<String>>,
 }
+
+/// Сколько разных «прямых» доменов помнить, прежде чем начать заново.
+const DIRECT_SEEN_MAX: usize = 5000;
 
 /// Запускает синкхол: слушает `listen` (+ [::1] на том же порту),
 /// незаблокированные запросы форвардит на `upstream`. Работает бесконечно.
@@ -60,6 +65,7 @@ pub async fn run(listen: &str, upstream: SocketAddr) -> std::io::Result<()> {
         block: RwLock::new(block),
         total: AtomicU64::new(0),
         blocked: AtomicU64::new(0),
+        direct_seen: Mutex::new(HashSet::new()),
     });
 
     let sock = Arc::new(UdpSocket::bind(&listen).await?);
@@ -181,6 +187,21 @@ async fn handle(
             let resp = make_nxdomain(&query);
             sock.send_to(&resp, from).await?;
             return Ok(());
+        }
+        // Запрос не с самого ПК (а, например, с роутера) — значит, какое-то
+        // приложение пытается выйти в интернет мимо прокси. Показываем домен
+        // один раз: так видно, кому прокси не подходит (голос, игры, UDP...).
+        if !from.ip().is_loopback() {
+            let first = {
+                let mut seen = st.direct_seen.lock().unwrap();
+                if seen.len() >= DIRECT_SEEN_MAX {
+                    seen.clear();
+                }
+                seen.insert(name.clone())
+            };
+            if first {
+                println!("[мимо прокси] {name}  (запрос от {})", from.ip());
+            }
         }
     }
 
