@@ -1,0 +1,6 @@
+/target
+
+# Рабочие файлы при запуске из папки проекта (в exe вшит dns_sinkhole/blocklist_hosts.txt)
+/blocklist_hosts.txt
+*.tmp
+socks5.dns_switched

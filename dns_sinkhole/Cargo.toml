@@ -1,0 +1,9 @@
+[package]
+name = "dns_sinkhole"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+# Маленький HTTP(S)-клиент на чистом Rust — скачивать свежий список доменов.
+ureq = "2"

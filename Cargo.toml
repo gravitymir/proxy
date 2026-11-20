@@ -1,0 +1,29 @@
+[package]
+name = "socks5"
+version = "0.1.0"
+edition = "2024"
+
+# Два крейта в одном репозитории: прокси (корень) и DNS-синкхол (библиотека
+# + отдельный exe). Общий target/ и Cargo.lock.
+[workspace]
+members = ["dns_sinkhole"]
+
+[dependencies]
+# Асинхронный рантайм. "full" — включает TcpListener/TcpStream, io-util,
+# copy_bidirectional, многопоточный планировщик и т.д.
+tokio = { version = "1", features = ["full"] }
+# DNS-синкхол — второй крейт этого workspace, подключён как библиотека.
+dns_sinkhole = { path = "dns_sinkhole" }
+# WinAPI: Job Object (убить детей при смерти родителя), обработчик
+# закрытия консоли, ANSI-цвета.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[build-dependencies]
+# Вшивает значок и манифест в exe (через rc.exe из Windows SDK).
+winresource = "0.1"
