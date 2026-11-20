@@ -150,3 +150,7 @@ Set-DnsClientServerAddress -InterfaceAlias 'Wi-Fi' -ResetServerAddresses
 
 Список доменов — [StevenBlack/hosts](https://github.com/StevenBlack/hosts)
 (лицензия MIT).
+
+## Лицензия
+
+[MIT](LICENSE).

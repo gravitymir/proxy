@@ -2,6 +2,7 @@
 name = "socks5"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 # Два крейта в одном репозитории: прокси (корень) и DNS-синкхол (библиотека
 # + отдельный exe). Общий target/ и Cargo.lock.
